@@ -231,6 +231,7 @@ jobs:
             arch: arm64
 
     name: Build Debian packages
+    if: ${{ false }}  # Nexwall: not needed for the Windows client (saves CI time)
     runs-on: "${{ matrix.runner }}"
     env:
       CHROOT_CONF: chroots/chroot.d.tar
@@ -327,3 +328,34 @@ jobs:
           name: openvpn-debian-${{ matrix.arch }}
           path: |
             output
+
+  nexwall_publish:
+    # Nexwall: attach the (unsigned) MSIs to the public pre-release "nightly" once the MSI builds are done.
+    name: nexwall-publish
+    needs: msvc
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository != 'openvpn/openvpn-build' }}
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the MSIs of this run
+        run: |
+          mkdir -p dl dist
+          gh run download ${{ github.run_id }} --repo "$GITHUB_REPOSITORY" --pattern '*.msi' --dir dl
+          for f in $(find dl -type f -name '*.msi'); do
+            arch=$(echo "$f" | sed -E 's/.*-(x86|amd64|arm64)\.msi$/\1/')
+            cp "$f" "dist/nexwall-vpn-windows-$arch-${GITHUB_SHA::7}.msi"
+          done
+          ls -l dist
+      - name: Publish to the pre-release "nightly"
+        run: |
+          gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create nightly --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "Nexwall VPN for Windows - test build (unsigned)" --notes "placeholder"
+          gh release upload nightly dist/*.msi --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit nightly --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "Nexwall VPN for Windows - test build (unsigned)" \
+            --notes "Automatic test build of commit ${GITHUB_SHA::7}. NOT code-signed (SmartScreen will warn). Based on OpenVPN (GPLv2); source in this repository and nexwall-vpn-client-windows."
